@@ -1,0 +1,25 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+	<PropertyGroup>
+		<TargetFramework>net10.0</TargetFramework>
+		<RootNamespace>SoftBridge.Services</RootNamespace>
+		<ImplicitUsings>enable</ImplicitUsings>
+		<Nullable>enable</Nullable>
+	</PropertyGroup>
+	<ItemGroup>
+		<ProjectReference Include="..\SoftBridge.Abstraction\SoftBridge.Abstraction.csproj" />
+		<ProjectReference Include="..\SoftBridge.Domain\SoftBridge.Domain.csproj" />
+	</ItemGroup>
+	<ItemGroup>
+		<PackageReference Include="AutoMapper" Version="16.1.1" />
+		<PackageReference Include="MailKit" Version="4.16.0" />
+		<PackageReference Include="System.IdentityModel.Tokens.Jwt" Version="8.16.0" />
+	</ItemGroup>
+	<ItemGroup>
+		<Folder Include="AutoMapper/ChatProfile/" />
+		<Folder Include="Services/Admin/" />
+		<Folder Include="Services/CategoryImplementation/" />
+		<Folder Include="Services/Chat/" />
+		<Folder Include="Specification/ChatSpecifications/" />
+		<Folder Include="Specification/ClientSpecification/" />
+	</ItemGroup>
+</Project>

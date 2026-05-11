@@ -1,0 +1,19 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+	<PropertyGroup>
+		<TargetFramework>net10.0</TargetFramework>
+		<RootNamespace>SoftBridge.Domain</RootNamespace>
+		<ImplicitUsings>enable</ImplicitUsings>
+		<Nullable>enable</Nullable>
+	</PropertyGroup>
+	<ItemGroup>
+	  <Compile Remove="Models\EnumsHelper\**" />
+	  <EmbeddedResource Remove="Models\EnumsHelper\**" />
+	  <None Remove="Models\EnumsHelper\**" />
+	</ItemGroup>
+	<ItemGroup>
+		<PackageReference Include="Microsoft.Extensions.Identity.Stores" Version="10.0.3" />
+	</ItemGroup>
+	<ItemGroup>
+		<Folder Include="Models/ServiceAggregates/" />
+	</ItemGroup>
+</Project>

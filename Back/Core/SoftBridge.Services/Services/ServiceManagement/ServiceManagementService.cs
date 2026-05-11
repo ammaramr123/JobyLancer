@@ -1,0 +1,352 @@
+﻿﻿using AutoMapper;
+using E_commerce.Shared.Common.Dto.Service;
+using Microsoft.AspNetCore.Http;
+using Microsoft.AspNetCore.Identity;
+using Microsoft.AspNetCore.Mvc.ViewEngines;
+using SoftBridge.Abstraction.IServices.Attachement;
+using SoftBridge.Abstraction.IServicesContract.Notification;
+using SoftBridge.Abstraction.IServicesContract.Services;
+using SoftBridge.Domain.Contracts.UnitOfWorkPattern;
+using SoftBridge.Domain.Exceptions;
+using SoftBridge.Domain.Exceptions.NotFoundModels;
+using SoftBridge.Domain.Exceptions.NotFoundModels.Category;
+using SoftBridge.Domain.Models.AccountAggregates;
+using SoftBridge.Domain.Models.EnumHelper;
+using SoftBridge.Domain.Models.ServiceAggregates;
+using SoftBridge.Domain.Models.User;
+using SoftBridge.Services.Specification.ProviderSpecifications;
+using SoftBridge.Services.Specification.ServicesSpecifications;
+using SoftBridge.Shared.Common.Dto.Attachement;
+using SoftBridge.Shared.Common.Dto.Notification;
+using SoftBridge.Shared.Common.Dto.Service;
+using SoftBridge.Shared.Common.Pagination;
+using SoftBridge.Shared.Common.Params.Service;
+using System;
+using System.Collections.Generic;
+using System.Text;
+
+namespace SoftBridge.Services.Services.ServiceManagement
+{
+    public class ServiceManagementService(
+        IUnitOfWork _unitOfWork,
+        IMapper _mapper,
+        IAttachmentService _attachmentService,
+        INotificationService _notificationService,
+        UserManager<ApplicationUser> _userManager 
+        ) : IServiceManagement
+    {
+        // Provider
+        public async Task<ServiceDto> CreateServiceAsync(CreateServiceDto createServiceDto, Guid userIdFromToken)
+        {
+            var applicationUserId = userIdFromToken.ToString();
+            // 0. Validate Provider 
+            var ProviderProfile  =  await ValidateandReturnProviderAsync(applicationUserId);
+            var providerId = ProviderProfile.Id;
+            // 1. Validate Category Exists and is Active
+            await ValidateCategoryAsync(createServiceDto.CategoryId);
+
+            var serviceEntity = _mapper.Map<Service>(createServiceDto);
+            serviceEntity.ProviderId = providerId;
+            serviceEntity.Status = ServiceStatus.Pending; // Default status
+
+            // 3. Handle Image Uploads (Helper Method)
+            if (createServiceDto.Images != null && createServiceDto.Images.Any())
+            {
+                serviceEntity.Images = await UploadServiceImagesAsync(createServiceDto.Images, providerId);
+            }
+            // 4. Save to Database
+            var serviceRepo = _unitOfWork.GetRepository<Service, Guid>();
+            await serviceRepo.AddAsync(serviceEntity);
+            await _unitOfWork.SaveChangesAsync();
+
+            // 5. Notify Admins
+            await NotifyAdminsAboutServiceAsync(serviceEntity, isNew:true);
+
+            // 6. Return mapped DTO
+            return _mapper.Map<ServiceDto>(serviceEntity);
+        }
+        // Provider
+        public async Task<ServiceDto> UpdateServiceAsync(Guid serviceId, UpdateServiceDto updateServiceDto, Guid userIdFromToken)
+        {
+            // 1.Validate Provider
+            var applicationUserId = userIdFromToken.ToString();
+            // 0. Validate Provider 
+            var ProviderProfile = await ValidateandReturnProviderAsync(applicationUserId);
+            var providerId = ProviderProfile.Id;
+            // 2. Get the existing service with its images
+            var serviceRepo = _unitOfWork.GetRepository<Service, Guid>();
+            var spec = new ServiceByIdWithImagesSpec(serviceId);
+            var existingService = await serviceRepo.GetByIdWithSpecAsync(spec);
+            // 3. Check existence and ownership
+            if (existingService == null)
+                throw new ServiceNotFoundException($"Service with not found.");
+            if (existingService.ProviderId != providerId)
+                throw new UnauthorizedExceptionCusotme();
+
+            // 4. Validate Category
+            if (existingService.CategoryId != updateServiceDto.CategoryId)
+                await ValidateCategoryAsync(updateServiceDto.CategoryId);
+            // 5. Map the updated fields onto the EXISTING entity
+            _mapper.Map(updateServiceDto, existingService);
+            // 6. Business Rule: Reset Status to Pending
+            existingService.Status = ServiceStatus.Pending;
+            // 7. Save changes
+            serviceRepo.Update(existingService);
+            await _unitOfWork.SaveChangesAsync();
+            // Notify Admins about the update
+            await NotifyAdminsAboutServiceAsync(existingService, isNew: false);
+            // 8. Return the updated DTO
+            return _mapper.Map<ServiceDto>(existingService);
+        }
+        // Provider 
+        public async Task<PaginationResponse<ServiceDto>> GetProviderServicesAsync(Guid providerId, ServiceQueryParams queryParams)
+        {
+            var serviceRepo = _unitOfWork.GetRepository<Service, Guid>();
+
+            // 1. Spec for getting Data (With Pagination, Includes, OrderBy)
+            var dataSpec = new ServiceWithFiltersForProviderSpec(providerId, queryParams);
+
+            // 2. Spec for getting the Total Count (Only Filters)
+            var countSpec = new ServiceCountForProviderSpec(providerId, queryParams);
+
+            // 3. Execute Queries
+            var services = await serviceRepo.GetAllWithSpecAsync(dataSpec);
+            var totalItems = await serviceRepo.GetCountAsync(countSpec); 
+            // return the total count of items that match the filters (without pagination) to calculate total pages on the client side
+
+            // 4. Mapping
+            var data = _mapper.Map<IReadOnlyList<ServiceDto>>(services);
+
+            // 5. Return
+            return new PaginationResponse<ServiceDto>(
+                queryParams.PageIndex,
+                queryParams.PageSize,
+                totalItems,
+                data
+            );
+        }
+        // Client or Admin
+        public async Task<PaginationResponse<ServiceDto>> GetAllServicesAsync(ServiceQueryParams queryParams)
+        {
+            var serviceRepo = _unitOfWork.GetRepository<Service, Guid>();
+
+            // 1.spec for data
+            var dataSpec = new ServiceWithFiltersSpec(queryParams);
+            // spec for count
+            var countSpec = new ServiceCountSpec(queryParams);
+
+            //2- get from db
+            var services = await serviceRepo.GetAllWithSpecAsync(dataSpec);
+            var totalItems = await serviceRepo.GetCountAsync(countSpec);
+
+            // 3. mapper
+            var data = _mapper.Map<IReadOnlyList<ServiceDto>>(services);
+
+            // 4.  Pagination
+            return new PaginationResponse<ServiceDto>(
+                queryParams.PageIndex,
+                queryParams.PageSize,
+                totalItems,
+                data
+            );
+        }
+        // Admin
+        public async Task<bool> ChangeServiceStatusAsync(Guid serviceId, ServiceStatus status, string? rejectionReason = null)
+        {
+            var serviceRepo = _unitOfWork.GetRepository<Service, Guid>();
+
+            // 1. Get the service with its provider (to get the provider's user id for notification)
+            var spec = new ServiceByIdWithProviderSpec(serviceId);
+            var service = await serviceRepo.GetByIdWithSpecAsync(spec);
+
+            if (service == null)
+                throw new ServiceNotFoundException($"Service not found.");
+            // IF admin tries to set the same status again, just ignore and return true (idempotent)
+            if (service.Status == status)
+                return true;
+            // Business Rules
+            if (status == ServiceStatus.Rejected && string.IsNullOrWhiteSpace(rejectionReason))
+                throw new BadRequestExceptionCustome("Rejection reason is required when rejecting a service.");
+
+            service.Status = status;
+            if (status == ServiceStatus.Rejected)
+                service.RejectionReason = rejectionReason;
+            else
+                service.RejectionReason = null;
+
+            serviceRepo.Update(service);
+            var result = await _unitOfWork.SaveChangesAsync() > 0;
+            if (result)
+                await NotifyProviderAboutServiceStatusAsync(service);
+            return result;
+        }
+        // Client or Admin or Provider (if the provider wants to see his own service details)
+        public async Task<ServiceDetailsDto> GetServiceDetailsByIdAsync(Guid serviceId)
+        {
+            var serviceRepo = _unitOfWork.GetRepository<Service, Guid>();
+
+            var spec = new ServiceDetailsByIdSpec(serviceId);
+            var service = await serviceRepo.GetByIdWithSpecAsync(spec);
+
+            if (service == null)
+                throw new ServiceNotFoundException($"Service not found.");
+
+            return _mapper.Map<ServiceDetailsDto>(service);
+        }
+        // Provider 
+        public async Task<bool> DeleteServiceAsync(Guid serviceId, Guid userIdFromToken)
+        {
+            var applicationUserId = userIdFromToken.ToString();
+            var providerProfile = await ValidateandReturnProviderAsync(applicationUserId);
+            var providerId = providerProfile.Id;
+
+            var serviceRepo = _unitOfWork.GetRepository<Service, Guid>();
+
+            var spec = new ServiceForDeletionSpec(serviceId);
+            var service = await serviceRepo.GetByIdWithSpecAsync(spec);
+
+            if (service == null)
+                throw new ServiceNotFoundException($"Service not found.");
+
+            if (service.ProviderId != providerId)
+                throw new UnauthorizedExceptionCusotme();
+
+            var hasActiveRequests = service.ServiceRequests.Any(req =>
+                req.Status == RequestStatus.Pending ||
+                req.Status == RequestStatus.Accepted);
+
+            if (hasActiveRequests)
+                throw new BadRequestExceptionCustome("Cannot delete this service because there are active requests from clients. You must complete or cancel them first.");
+
+            // delete images from storage (Helper Method)
+            if (service.Images != null && service.Images.Any())
+                foreach (var image in service.Images)
+                    await _attachmentService.DeleteFileAsync(image.ImageUrl);
+
+            serviceRepo.Delete(service);
+            return await _unitOfWork.SaveChangesAsync() > 0;
+        }
+
+
+        #region Private Helper Methods for create and update services
+
+        // guid or userID?
+        private async Task<SProvider> ValidateandReturnProviderAsync(string userId)
+        {
+            var profileSpec = new ProviderProfileByAppUserIdSpec(userId);
+            var provider = await _unitOfWork.GetRepository<SProvider, Guid>().GetByIdWithSpecAsync(profileSpec);
+            var providerRepo = _unitOfWork.GetRepository<SProvider, Guid>();
+
+            if (provider == null)
+                throw new ProviderNotFoundException($"Provider profile not found.");
+
+            if (!provider.User.IsActive)
+                throw new BadRequestExceptionCustome("Your account is not active. You cannot take this action.");
+
+            if (provider.Status != ProviderAccountStatus.Approved)
+                throw new BadRequestExceptionCustome("Your account is not approved yet. You cannot create services until an admin approves your profile.");
+            return provider;
+        }
+        private async Task ValidateCategoryAsync(Guid categoryId)
+        {
+            var categoryRepo = _unitOfWork.GetRepository<Category, Guid>();
+            var category = await categoryRepo.GetByIdAsync(categoryId);
+
+            if (category == null)
+                throw new CategoryNotFoundException($"Category with ID {categoryId} not found.");
+
+            if (!category.IsActive)
+                throw new BadRequestExceptionCustome("Cannot create a service in an inactive category.");
+        }
+        private async Task<ICollection<ServiceImage>> UploadServiceImagesAsync(List<IFormFile> images, Guid providerId)
+        {
+            var uploadedImages = new List<ServiceImage>();
+            int order = 1;
+
+            foreach (var file in images)
+            {
+                var uploadDto = new UploadFileDto
+                {
+                    File = file,
+                    FolderName = Path.Combine("Services", providerId.ToString())
+                };
+
+                var imagePath = await _attachmentService.UploadFileAsync(uploadDto);
+
+                uploadedImages.Add(new ServiceImage
+                {
+                    ImageUrl = imagePath,
+                    IsPortfolio = order > 1, // if first image so it not protofolio its main image
+                    DisplayOrder = order++
+                });
+            }
+
+            return uploadedImages;
+        }
+        private async Task NotifyAdminsAboutServiceAsync(Service service, bool isNew)
+        {
+            string action = isNew ? "إنشاء خدمة جديدة" : "تعديل خدمة حالية";
+
+            var admins = await _userManager.GetUsersInRoleAsync("Admin");
+
+            foreach (var admin in admins)
+            {
+                var notificationMessage = new NotificationContentDto
+                {
+                    UserId = admin.Id, 
+                    Email = admin.Email,
+                    Subject = $"مراجعة مطلوبة: {action} 🔔",
+                    Body = $"قام مقدم الخدمة بتقديم طلب {action} باسم '{service.Title}'. يرجى الدخول للوحة التحكم لمراجعتها.",
+                    ReferenceId = service.Id
+                };
+
+                // 3. Push & Email 
+                await _notificationService.SendNotificationAsync(
+                    notificationMessage,
+                    NotificationType.Push,
+                    NotificationType.Email
+                );
+            }
+        }
+        private async Task NotifyProviderAboutServiceStatusAsync(Service service)
+        {
+            string subject = "";
+            string body = "";
+
+            if (service.Status == ServiceStatus.Approved)
+            {
+                subject = "تمت الموافقة على خدمتك! 🎉";
+                body = $"مبروك! تمت الموافقة على خدمتك '{service.Title}' وهي الآن متاحة للعملاء.";
+            }
+            else if (service.Status == ServiceStatus.Rejected)
+            {
+                subject = "تحديث بخصوص خدمتك ⚠️";
+                body = $"تم رفض خدمتك '{service.Title}'. السبب: {service.RejectionReason}. يرجى التعديل وإعادة التقديم.";
+            }
+            else
+            {
+                return; 
+            }
+
+            var notificationMessage = new NotificationContentDto
+            {
+                UserId = service.Provider.UserId,
+                Email = service.Provider.User?.Email, //Spec  Include  User
+                Subject = subject,
+                Body = body,
+                ReferenceId = service.Id
+            };
+
+            await _notificationService.SendNotificationAsync(
+                notificationMessage,
+                NotificationType.Push,
+                NotificationType.Email
+            );
+        }
+
+        public Task<PaginationResponse<ServiceDto>> GetAdminServicesAsync(ServiceQueryParams queryParams)
+            => GetAllServicesAsync(queryParams);
+        #endregion
+
+    }
+}

@@ -1,0 +1,16 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+	<PropertyGroup>
+		<TargetFramework>net10.0</TargetFramework>
+		<RootNamespace>SoftBridge.Abstraction</RootNamespace>
+		<ImplicitUsings>enable</ImplicitUsings>
+		<Nullable>enable</Nullable>
+	</PropertyGroup>
+	<ItemGroup>
+		<Compile Remove="IService\**" />
+		<EmbeddedResource Remove="IService\**" />
+		<None Remove="IService\**" />
+	</ItemGroup>
+	<ItemGroup>
+		<ProjectReference Include="..\..\SoftBridge.Shared\SoftBridge.Shared.csproj" />
+	</ItemGroup>
+</Project>

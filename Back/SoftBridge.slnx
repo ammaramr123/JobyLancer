@@ -1,0 +1,13 @@
+<Solution>
+  <Folder Name="/Core/">
+    <Project Path="Core/SoftBridge.Abstraction/SoftBridge.Abstraction.csproj" />
+    <Project Path="Core/SoftBridge.Domain/SoftBridge.Domain.csproj" />
+    <Project Path="Core/SoftBridge.Services/SoftBridge.Services.csproj" />
+  </Folder>
+  <Folder Name="/Infrastructure/">
+    <Project Path="Infrastructure/SoftBridge.Persistence/SoftBridge.Persistence.csproj" />
+    <Project Path="Infrastructure/SoftBridge.Presentation/SoftBridge.Presentation.csproj" />
+  </Folder>
+  <Project Path="SoftBridge.Shared/SoftBridge.Shared.csproj" />
+  <Project Path="SoftBridge.Web/SoftBridge.Web.csproj" />
+</Solution>

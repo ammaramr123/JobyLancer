@@ -1,0 +1,26 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <RootNamespace>SoftBridge.Shared</RootNamespace>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Compile Remove="Dto_s\**" />
+    <EmbeddedResource Remove="Dto_s\**" />
+    <None Remove="Dto_s\**" />
+  </ItemGroup>
+	<ItemGroup>
+		<FrameworkReference Include="Microsoft.AspNetCore.App" />
+	</ItemGroup>
+	<ItemGroup>
+	  <ProjectReference Include="..\Core\SoftBridge.Domain\SoftBridge.Domain.csproj" />
+	</ItemGroup>
+	<ItemGroup>
+	  <Folder Include="Common/Dto/Category/" />
+	  <Folder Include="Common/Dto/Chat/" />
+	  <Folder Include="Common/Params/Chat/" />
+	</ItemGroup>
+</Project>
